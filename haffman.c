@@ -1,586 +1,299 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
+#include <stdio.h>          // подключаем стандартную библиотеку ввода/вывода (printf, fopen, fgetc, fwrite и т.д.)
+#include <stdlib.h>         // подключаем malloc(), free(), exit()
+#include <string.h>         // подключаем функции для работы со строками (strcpy)
 
-// ==================== СТРУКТУРЫ ДАННЫХ ====================
+#define N 256               // количество возможных байтовых символов — от 0 до 255
 
+// ======================
+// Структура узла дерева
+// ======================
 typedef struct Node {
-    unsigned char symbol;
-    unsigned int freq;
-    struct Node *left;
-    struct Node *right;
+    unsigned char ch;       // символ (только если узел является листом)
+    unsigned int freq;      // частота появления символа в файле
+    struct Node* left;      // указатель на левое поддерево
+    struct Node* right;     // указатель на правое поддерево
 } Node;
 
-typedef struct MinHeap {
-    int size;
-    int capacity;
-    Node **array;
-} MinHeap;
+// ====================================
+// Простая минимальная куча (min-heap)
+// ====================================
+typedef struct {
+    Node* a[N];             // массив указателей на узлы кучи
+    int size;               // текущее количество элементов в куче
+} Heap;
 
-typedef struct HuffmanCode {
-    unsigned char symbol;
-    char code[256];
-    int length;
-} HuffmanCode;
-
-// ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-
-void* safe_malloc(size_t size) {
-    void* ptr = malloc(size);
-    if (!ptr) {
-        fprintf(stderr, "Ошибка выделения памяти\n");
-        exit(EXIT_FAILURE);
-    }
-    return ptr;
+// создаём новый узел дерева Хаффмана
+Node* makeNode(unsigned char c, unsigned int f, Node* L, Node* R) {
+    Node* n = malloc(sizeof(Node));   // выделяем память под новый узел
+    n->ch = c;                        // сохраняем символ
+    n->freq = f;                      // сохраняем частоту символа
+    n->left = L;                      // указываем левого ребёнка
+    n->right = R;                     // указываем правого ребёнка
+    return n;                         // возвращаем созданный узел
 }
 
-// ==================== МИНИМАЛЬНАЯ КУЧА ====================
-
-static void swap_nodes(Node** a, Node** b) {
-    Node* temp = *a;
-    *a = *b;
-    *b = temp;
+// инициализируем кучу
+void heapInit(Heap* h) {
+    h->size = 0;                      // указываем, что куча пуста
 }
 
-static void minheapify(MinHeap* heap, int idx) {
-    int smallest = idx;
-    int left = 2 * idx + 1;
-    int right = 2 * idx + 2;
+// меняем два элемента массива местами
+void swap(Node** x, Node** y) {
+    Node* t = *x;                     // временно сохраняем значение
+    *x = *y;                          // копируем один указатель
+    *y = t;                           // записываем сохранённый назад
+}
 
-    if (left < heap->size && 
-        heap->array[left]->freq < heap->array[smallest]->freq)
-        smallest = left;
-
-    if (right < heap->size && 
-        heap->array[right]->freq < heap->array[smallest]->freq)
-        smallest = right;
-
-    if (smallest != idx) {
-        swap_nodes(&heap->array[smallest], &heap->array[idx]);
-        minheapify(heap, smallest);
+// поднимаем элемент вверх по куче (операция "всплытия")
+void heapUp(Heap* h, int i) {
+    while (i > 0) {                   // пока не дошли до корня
+        int p = (i - 1) / 2;          // вычисляем индекс родителя
+        if (h->a[i]->freq < h->a[p]->freq) { // если частота меньше частоты родителя
+            swap(&h->a[i], &h->a[p]); // меняем местами
+            i = p;                    // продолжаем подниматься
+        } else break;                 // если порядок правильный — выходим
     }
 }
 
-Node* create_node(unsigned char symbol, unsigned int freq) {
-    Node* node = (Node*)safe_malloc(sizeof(Node));
-    node->symbol = symbol;
-    node->freq = freq;
-    node->left = NULL;
-    node->right = NULL;
-    return node;
-}
+// опускаем элемент вниз по куче (операция "погружения")
+void heapDown(Heap* h, int i) {
+    while (1) {
+        int l = i*2 + 1;              // индекс левого ребёнка
+        int r = i*2 + 2;              // индекс правого ребёнка
+        int smallest = i;             // предполагаем, что текущий элемент минимальный
 
-MinHeap* create_minheap(int capacity) {
-    MinHeap* heap = (MinHeap*)safe_malloc(sizeof(MinHeap));
-    heap->size = 0;
-    heap->capacity = capacity;
-    heap->array = (Node**)safe_malloc(capacity * sizeof(Node*));
-    return heap;
-}
+        if (l < h->size && h->a[l]->freq < h->a[smallest]->freq)
+            smallest = l;             // если левый меньше — помечаем его как минимальный
 
-Node* extract_min(MinHeap* heap) {
-    if (heap->size == 0)
-        return NULL;
+        if (r < h->size && h->a[r]->freq < h->a[smallest]->freq)
+            smallest = r;             // если правый меньше — обновляем минимальный
 
-    Node* min = heap->array[0];
-    heap->array[0] = heap->array[heap->size - 1];
-    heap->size--;
-    minheapify(heap, 0);
-    return min;
-}
-
-void insert_minheap(MinHeap* heap, Node* node) {
-    if (heap->size >= heap->capacity) {
-        heap->capacity *= 2;
-        heap->array = (Node**)realloc(heap->array, heap->capacity * sizeof(Node*));
-        if (!heap->array) {
-            fprintf(stderr, "Ошибка перевыделения памяти для кучи\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-    
-    int i = heap->size;
-    heap->array[i] = node;
-    heap->size++;
-    
-    // Просеивание вверх
-    while (i > 0 && heap->array[(i - 1) / 2]->freq > heap->array[i]->freq) {
-        swap_nodes(&heap->array[i], &heap->array[(i - 1) / 2]);
-        i = (i - 1) / 2;
+        if (smallest != i) {          // если минимальный — не текущий элемент
+            swap(&h->a[i], &h->a[smallest]); // меняем текущий и минимальный
+            i = smallest;             // продолжаем опускать вниз
+        } else break;                 // если порядок в норме — выходим
     }
 }
 
-void build_minheap(MinHeap* heap) {
-    int n = heap->size - 1;
-    for (int i = (n - 1) / 2; i >= 0; i--)
-        minheapify(heap, i);
+// добавление элемента в кучу
+void heapPush(Heap* h, Node* n) {
+    h->a[h->size] = n;                // вставляем новый элемент в конец массива
+    heapUp(h, h->size);               // поднимаем его вверх для восстановления порядка
+    h->size++;                        // увеличиваем размер кучи
 }
 
-void free_minheap(MinHeap* heap) {
-    if (heap) {
-        free(heap->array);
-        free(heap);
-    }
+// достаём и возвращаем минимальный элемент (корень)
+Node* heapPop(Heap* h) {
+    Node* res = h->a[0];              // минимальный элемент хранится в корне (индекс 0)
+    h->size--;                        // уменьшаем размер кучи
+    h->a[0] = h->a[h->size];          // переносим последний элемент в корень
+    heapDown(h, 0);                   // опускаем его вниз для восстановления порядка
+    return res;                       // возвращаем минимальный узел
 }
 
-// ==================== ОСНОВНЫЕ ФУНКЦИИ ХАФФМАНА ====================
+// =============================
+// Подсчет частот символов файла
+// =============================
+void countFreq(const char* name, unsigned int freq[]) {
+    for (int i = 0; i < N; i++)
+        freq[i] = 0;                  // обнуляем частоту всех 256 возможных байтов
 
-unsigned int* count_frequencies(const char* filename, int* unique_count, 
-                                 size_t* total_bytes) {
-    FILE* file = fopen(filename, "rb");
-    if (!file) {
-        fprintf(stderr, "Ошибка открытия файла: %s\n", filename);
-        return NULL;
+    FILE* f = fopen(name, "rb");      // открываем файл в бинарном режиме для чтения
+    if (!f) {
+        printf("Не удалось открыть файл!\n"); // выводим ошибку, если файл открыть не удалось
+        exit(1);                                // завершаем программу
     }
-    
-    unsigned int* freq = (unsigned int*)calloc(256, sizeof(unsigned int));
-    if (!freq) {
-        fclose(file);
-        return NULL;
+
+    int c;
+    while ((c = fgetc(f)) != EOF) {   // читаем каждый байт, пока не конец файла
+        freq[c]++;                    // увеличиваем частоту встречаемого байта
     }
-    
-    unsigned char buffer[4096];
-    size_t bytes_read;
-    *total_bytes = 0;
-    
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        *total_bytes += bytes_read;
-        for (size_t i = 0; i < bytes_read; i++)
-            freq[buffer[i]]++;
-    }
-    
-    fclose(file);
-    
-    *unique_count = 0;
-    for (int i = 0; i < 256; i++)
-        if (freq[i] > 0) (*unique_count)++;
-    
-    return freq;
+
+    fclose(f);                        // закрываем файл
 }
 
-Node* build_huffman_tree(unsigned int* freq) {
-    MinHeap* heap = create_minheap(256);
-    
-    for (int i = 0; i < 256; i++)
+// =====================================
+// Построение дерева Хаффмана
+// =====================================
+Node* buildTree(unsigned int freq[]) {
+    Heap h;
+    heapInit(&h);                     // инициализируем пустую кучу
+
+    // добавляем в кучу все символы, которые встретились хотя бы 1 раз
+    for (int i = 0; i < N; i++)
         if (freq[i] > 0)
-            heap->array[heap->size++] = create_node(i, freq[i]);
-    
-    if (heap->size == 0) {
-        free_minheap(heap);
-        return NULL;
+            heapPush(&h, makeNode(i, freq[i], NULL, NULL)); // создаём листовой узел и добавляем в кучу
+
+    // если в файле был только один тип символа
+    if (h.size == 1) {
+        Node* only = heapPop(&h);     // достаём единственный узел
+        return makeNode(0, only->freq, only, NULL); // создаём искусственный корень
     }
-    
-    if (heap->size == 1) {
-        Node* single_node = heap->array[0];
-        Node* root = create_node(0, single_node->freq);
-        root->left = single_node;
-        root->right = create_node(single_node->symbol, 0);
-        free_minheap(heap);
-        return root;
+
+    // основной цикл: объединяем два узла с минимальной частотой
+    while (h.size > 1) {
+        Node* a = heapPop(&h);        // достаём первый минимальный
+        Node* b = heapPop(&h);        // достаём второй минимальный
+
+        Node* parent = makeNode(0, a->freq + b->freq, a, b); // создаём родителя с суммарной частотой
+        heapPush(&h, parent);         // помещаем родителя обратно в кучу
     }
-    
-    build_minheap(heap);
-    
-    while (heap->size > 1) {
-        Node* left = extract_min(heap);
-        Node* right = extract_min(heap);
-        
-        Node* parent = create_node(0, left->freq + right->freq);
-        parent->left = left;
-        parent->right = right;
-        
-        insert_minheap(heap, parent);
-    }
-    
-    Node* root = extract_min(heap);
-    free_minheap(heap);
-    return root;
+
+    return heapPop(&h);               // последний оставшийся элемент — корень дерева
 }
 
-void generate_codes_recursive(Node* root, char* current_code, int depth, 
-                              HuffmanCode* codes, int* index) {
-    if (!root) return;
-    
-    if (!root->left && !root->right) {
-        codes[*index].symbol = root->symbol;
-        codes[*index].length = depth;
-        if (depth > 0) {
-            strncpy(codes[*index].code, current_code, depth);
-        }
-        codes[*index].code[depth] = '\0';
-        (*index)++;
-        return;
+// =====================================
+// Генерация кодов символов
+// =====================================
+void makeCodes(Node* root, char codes[][N], char* tmp, int depth) {
+    if (!root->left && !root->right) { // если узел листовой (нет детей)
+        tmp[depth] = '\0';             // завершаем строку текущего кода
+        if (depth == 0)                // если дерево состоит из одного символа
+            strcpy(codes[root->ch], "0"); // код будет "0"
+        else
+            strcpy(codes[root->ch], tmp); // копируем сформированный код
+        return;                        // завершаем рекурсию
     }
-    
+
+    // идём влево — добавляем '0'
     if (root->left) {
-        current_code[depth] = '0';
-        generate_codes_recursive(root->left, current_code, depth + 1, codes, index);
+        tmp[depth] = '0';              // добавляем 0 в текущий путь
+        makeCodes(root->left, codes, tmp, depth + 1); // рекурсивно идём дальше
     }
-    
+
+    // идём вправо — добавляем '1'
     if (root->right) {
-        current_code[depth] = '1';
-        generate_codes_recursive(root->right, current_code, depth + 1, codes, index);
+        tmp[depth] = '1';              // добавляем 1 в путь
+        makeCodes(root->right, codes, tmp, depth + 1); // рекурсивно строим код
     }
 }
 
-HuffmanCode* get_huffman_codes(Node* root, int unique_count) {
-    if (!root || unique_count == 0) return NULL;
-    
-    HuffmanCode* codes = (HuffmanCode*)safe_malloc(unique_count * sizeof(HuffmanCode));
-    char current_code[256] = {0};
-    int index = 0;
-    
-    generate_codes_recursive(root, current_code, 0, codes, &index);
-    return codes;
-}
+// =======================================
+// Кодирование файла в сжатый бинарный вид
+// =======================================
+void encode(const char* in, const char* out, char codes[][N], unsigned int size) {
+    FILE* f1 = fopen(in, "rb");       // открываем исходный файл
+    FILE* f2 = fopen(out, "wb");      // открываем файл для записи сжатых данных
 
-const char* find_code(HuffmanCode* codes, int unique_count, unsigned char symbol) {
-    for (int i = 0; i < unique_count; i++)
-        if (codes[i].symbol == symbol)
-            return codes[i].code;
-    return NULL;
-}
+    fwrite(&size, sizeof(unsigned int), 1, f2); // записываем исходный размер файла (для декодирования)
 
-void free_tree(Node* root) {
-    if (!root) return;
-    free_tree(root->left);
-    free_tree(root->right);
-    free(root);
-}
+    unsigned char byte = 0;           // буфер для накопления 8 бит
+    int bits = 0;                     // количество уже записанных бит в byte
 
-// ==================== РЕЖИМ КОДИРОВАНИЯ ====================
+    int c;
+    while ((c = fgetc(f1)) != EOF) {  // читаем каждый символ файла
+        char* code = codes[c];        // берём его код Хаффмана
 
-void encode_file(const char* input_filename, const char* output_filename) {
-    printf("=== РЕЖИМ КОДИРОВАНИЯ ===\n\n");
-    
-    unsigned int* freq = NULL;
-    Node* root = NULL;
-    HuffmanCode* codes = NULL;
-    FILE* input_file = NULL;
-    FILE* output_file = NULL;
-    
-    printf("1. Анализ файла и подсчет частот символов...\n");
-    int unique_count = 0;
-    size_t original_size = 0;
-    
-    freq = count_frequencies(input_filename, &unique_count, &original_size);
-    if (!freq) {
-        printf("Ошибка: не удалось прочитать файл\n");
-        goto cleanup;
-    }
-    
-    if (original_size == 0) {
-        printf("Ошибка: файл пуст\n");
-        goto cleanup;
-    }
-    
-    printf("   Уникальных символов: %d\n", unique_count);
-    printf("   Общий размер: %lu байт\n", original_size);
-    
-    printf("\n2. Построение дерева Хаффмана...\n");
-    root = build_huffman_tree(freq);
-    if (!root) {
-        printf("Ошибка построения дерева\n");
-        goto cleanup;
-    }
-    
-    printf("\n3. Генерация кодов Хаффмана...\n");
-    codes = get_huffman_codes(root, unique_count);
-    if (!codes) {
-        printf("Ошибка генерации кодов\n");
-        goto cleanup;
-    }
-    
-    printf("\n4. Кодирование и сохранение...\n");
-    
-    input_file = fopen(input_filename, "rb");
-    if (!input_file) {
-        printf("Ошибка открытия входного файла\n");
-        goto cleanup;
-    }
-    
-    output_file = fopen(output_filename, "wb");
-    if (!output_file) {
-        printf("Ошибка открытия выходного файла\n");
-        goto cleanup;
-    }
-    
-    // Запись заголовка
-    fwrite(&unique_count, sizeof(int), 1, output_file);
-    for (int i = 0; i < 256; i++) {
-        if (freq[i] > 0) {
-            unsigned char symbol = i;
-            fwrite(&symbol, sizeof(unsigned char), 1, output_file);
-            fwrite(&freq[i], sizeof(unsigned int), 1, output_file);
-        }
-    }
-    
-    // Кодирование данных
-    unsigned char read_buffer;
-    unsigned char write_buffer = 0;
-    int bit_position = 0;
-    size_t encoded_bits = 0;
-    size_t encoded_bytes = 0;
-    
-    while (fread(&read_buffer, 1, 1, input_file) == 1) {
-        const char* code = find_code(codes, unique_count, read_buffer);
-        if (code) {
-            for (int i = 0; code[i] != '\0'; i++) {
-                write_buffer <<= 1;
-                if (code[i] == '1') write_buffer |= 1;
-                bit_position++;
-                encoded_bits++;
-                
-                if (bit_position == 8) {
-                    fwrite(&write_buffer, 1, 1, output_file);
-                    encoded_bytes++;
-                    write_buffer = 0;
-                    bit_position = 0;
-                }
+        for (int i = 0; code[i]; i++) { // перебираем биты кода
+            byte = (byte << 1) | (code[i] - '0'); // добавляем бит в байт
+            bits++;                               // считаем количество записанных бит
+
+            if (bits == 8) {          // если байт заполнен
+                fputc(byte, f2);      // записываем байт
+                byte = 0;             // очищаем байт
+                bits = 0;             // сбрасываем счётчик бит
             }
         }
     }
-    
-    // Запись остатка
-    if (bit_position > 0) {
-        write_buffer <<= (8 - bit_position);
-        fwrite(&write_buffer, 1, 1, output_file);
-        encoded_bytes++;
-    }
-    
-    // Сохранение информации о последнем байте
-    fwrite(&bit_position, sizeof(int), 1, output_file);
-    
-    // Статистика
-    printf("\n5. Статистика сжатия:\n");
-    size_t header_size = sizeof(int) + unique_count * (sizeof(unsigned char) + sizeof(unsigned int));
-    size_t total_compressed_size = header_size + encoded_bytes + sizeof(int);
-    
-    printf("   Исходный размер:    %lu байт\n", original_size);
-    printf("   Размер заголовка:   %lu байт\n", header_size);
-    printf("   Закодированные данные: %lu байт\n", encoded_bytes);
-    printf("   Общий размер:       %lu байт\n", total_compressed_size);
-    
-    if (original_size > 0) {
-        double compression_ratio = (1.0 - (double)total_compressed_size / original_size) * 100;
-        printf("   Коэффициент сжатия: %.2f%%\n", compression_ratio);
-    }
-    
-    printf("\nКодирование завершено успешно!\n");
-    printf("Результат сохранен в: %s\n", output_filename);
 
-cleanup:
-    if (input_file) fclose(input_file);
-    if (output_file) fclose(output_file);
-    if (freq) free(freq);
-    if (root) free_tree(root);
-    if (codes) free(codes);
+    if (bits > 0) {                    // если остались неполные биты
+        byte <<= (8 - bits);           // добиваем нулями слева
+        fputc(byte, f2);               // записываем последний байт
+    }
+
+    fclose(f1);                         // закрываем входной файл
+    fclose(f2);                         // закрываем выходной файл
 }
 
-// ==================== РЕЖИМ ДЕКОДИРОВАНИЯ ====================
+// =======================================
+//   Декодирование файла — читаем биты
+// =======================================
+void decode(const char* in, const char* out, Node* root) {
+    FILE* f1 = fopen(in, "rb");        // открываем сжатый файл
+    FILE* f2 = fopen(out, "wb");       // открываем файл для восстановления
 
-void decode_file(const char* input_filename, const char* output_filename) {
-    printf("=== РЕЖИМ ДЕКОДИРОВАНИЯ ===\n\n");
-    
-    FILE* input_file = NULL;
-    FILE* output_file = NULL;
-    unsigned int* freq = NULL;
-    Node* root = NULL;
-    
-    printf("1. Чтение заголовка сжатого файла...\n");
-    
-    input_file = fopen(input_filename, "rb");
-    if (!input_file) {
-        printf("Ошибка открытия входного файла\n");
-        goto decode_cleanup;
-    }
-    
-    int unique_count = 0;
-    if (fread(&unique_count, sizeof(int), 1, input_file) != 1) {
-        printf("Ошибка: неверный формат файла\n");
-        goto decode_cleanup;
-    }
-    
-    if (unique_count <= 0 || unique_count > 256) {
-        printf("Ошибка: некорректное количество символов: %d\n", unique_count);
-        goto decode_cleanup;
-    }
-    
-    printf("   Уникальных символов в таблице: %d\n", unique_count);
-    
-    freq = (unsigned int*)calloc(256, sizeof(unsigned int));
-    if (!freq) {
-        printf("Ошибка выделения памяти\n");
-        goto decode_cleanup;
-    }
-    
-    for (int i = 0; i < unique_count; i++) {
-        unsigned char symbol;
-        unsigned int frequency;
-        
-        if (fread(&symbol, sizeof(unsigned char), 1, input_file) != 1 ||
-            fread(&frequency, sizeof(unsigned int), 1, input_file) != 1) {
-            printf("Ошибка чтения таблицы частот\n");
-            goto decode_cleanup;
-        }
-        freq[symbol] = frequency;
-    }
-    
-    printf("\n2. Восстановление дерева Хаффмана...\n");
-    root = build_huffman_tree(freq);
-    if (!root) {
-        printf("Ошибка восстановления дерева\n");
-        goto decode_cleanup;
-    }
-    
-    printf("\n3. Декодирование данных...\n");
-    
-    output_file = fopen(output_filename, "wb");
-    if (!output_file) {
-        printf("Ошибка открытия выходного файла\n");
-        goto decode_cleanup;
-    }
-    
-    // Определение размера данных
-    fseek(input_file, 0, SEEK_END);
-    long file_end = ftell(input_file);
-    
-    // Чтение информации о последнем байте
-    fseek(input_file, -sizeof(int), SEEK_END);
-    int last_byte_bits = 0;
-    if (fread(&last_byte_bits, sizeof(int), 1, input_file) != 1) {
-        printf("Ошибка чтения информации о последнем байте\n");
-        goto decode_cleanup;
-    }
-    
-    if (last_byte_bits < 0 || last_byte_bits > 8) {
-        printf("Ошибка: некорректное количество бит в последнем байте: %d\n", last_byte_bits);
-        goto decode_cleanup;
-    }
-    
-    // Вычисление позиции начала данных
-    long header_size = sizeof(int) + unique_count * (sizeof(unsigned char) + sizeof(unsigned int));
-    long data_start = header_size;
-    long data_size = file_end - data_start - sizeof(int);
-    
-    if (data_size < 0) {
-        printf("Ошибка: некорректный размер данных\n");
-        goto decode_cleanup;
-    }
-    
-    fseek(input_file, data_start, SEEK_SET);
-    
-    // Декодирование
-    Node* current = root;
-    unsigned char byte;
-    int bits_processed = 0;
-    int total_bits = 0;
-    
-    if (data_size > 0) {
-        if (last_byte_bits == 0) {
-            total_bits = data_size * 8;
-        } else {
-            total_bits = (data_size - 1) * 8 + last_byte_bits;
+    unsigned int originalSize;
+    fread(&originalSize, sizeof(unsigned int), 1, f1); // читаем исходный размер
+
+    unsigned int written = 0;          // сколько символов восстановили
+    int c;
+    Node* cur = root;                  // начинаем поиск с корня
+
+    while ((c = fgetc(f1)) != EOF && written < originalSize) { // читаем байт
+        for (int bit = 7; bit >= 0; bit--) { // читаем биты от старшего к младшему
+            int b = (c >> bit) & 1;          // получаем конкретный бит (0 или 1)
+
+            cur = (b == 0 ? cur->left : cur->right); // двигаемся по дереву
+
+            if (!cur->left && !cur->right) { // если узел — лист
+                fputc(cur->ch, f2);          // записываем символ
+                written++;                   // учёт количества символов
+                cur = root;                  // начинаем с корня заново
+
+                if (written == originalSize) break; // если всё восстановили — стоп
+            }
         }
     }
-    
-    size_t decoded_bytes = 0;
-    
-    for (long i = 0; i < data_size; i++) {
-        if (fread(&byte, 1, 1, input_file) != 1) break;
-        
-        int bits_to_process = (i == data_size - 1 && last_byte_bits > 0) ? last_byte_bits : 8;
-        
-        for (int bit = 7; bit >= 8 - bits_to_process; bit--) {
-            int current_bit = (byte >> bit) & 1;
-            
-            if (current_bit == 0) {
-                current = current->left;
-            } else {
-                current = current->right;
-            }
-            
-            if (!current) {
-                printf("Ошибка: достигнут NULL узел при декодировании\n");
-                goto decode_cleanup;
-            }
-            
-            bits_processed++;
-            
-            if (!current->left && !current->right) {
-                fwrite(&current->symbol, 1, 1, output_file);
-                decoded_bytes++;
-                current = root;
-            }
-            
-            if (bits_processed >= total_bits) break;
-        }
-        if (bits_processed >= total_bits) break;
-    }
-    
-    printf("\n4. Результаты декодирования:\n");
-    printf("   Декодировано байт: %lu\n", decoded_bytes);
-    printf("   Обработано бит: %d\n", bits_processed);
-    printf("\nДекодирование завершено успешно!\n");
-    printf("Результат сохранен в: %s\n", output_filename);
 
-decode_cleanup:
-    if (input_file) fclose(input_file);
-    if (output_file) fclose(output_file);
-    if (freq) free(freq);
-    if (root) free_tree(root);
+    fclose(f1);                        // закрываем сжатый файл
+    fclose(f2);                        // закрываем восстановленный файл
 }
 
-// ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
+// ==========================
+// Сравнение двух файлов
+// ==========================
+int sameFiles(const char* a, const char* b) {
+    FILE* f1 = fopen(a, "rb");         // открываем первый файл
+    FILE* f2 = fopen(b, "rb");         // открываем второй файл
 
-void print_help() {
-    printf("\nПрограмма алгоритма Хаффмана для сжатия и восстановления файлов\n");
-    printf("===============================================================\n\n");
-    printf("Использование:\n");
-    printf("  ./huffman <режим> <входной_файл> <выходной_файл>\n\n");
-    printf("Режимы работы:\n");
-    printf("  encode  - сжатие файла (кодирование)\n");
-    printf("  decode  - восстановление файла (декодирование)\n\n");
-    printf("Примеры:\n");
-    printf("  ./huffman encode document.txt compressed.bin\n");
-    printf("  ./huffman decode compressed.bin restored.txt\n\n");
-    printf("Проверка корректности:\n");
-    printf("  diff document.txt restored.txt\n");
+    int x, y;
+    do {
+        x = fgetc(f1);                 // читаем байт
+        y = fgetc(f2);                 // читаем байт второго файла
+        if (x != y) return 0;          // если байты разные — файлы отличаются
+    } while (x != EOF);                // пока не конец файла
+
+    return 1;                           // если дошли до конца — файлы одинаковые
 }
 
-int main(int argc, char* argv[]) {
-    printf("Алгоритм Хаффмана - сжатие без потерь\n");
-    printf("=====================================\n");
-    
-    if (argc != 4) {
-        print_help();
-        return 1;
-    }
-    
-    char* mode = argv[1];
-    char* input_file = argv[2];
-    char* output_file = argv[3];
-    
-    // Проверка существования входного файла
-    FILE* test = fopen(input_file, "rb");
-    if (!test) {
-        printf("Ошибка: входной файл '%s' не найден\n", input_file);
-        return 1;
-    }
-    fclose(test);
-    
-    if (strcmp(mode, "encode") == 0) {
-        encode_file(input_file, output_file);
-    } 
-    else if (strcmp(mode, "decode") == 0) {
-        decode_file(input_file, output_file);
-    }
-    else {
-        printf("Ошибка: неверный режим '%s'\n", mode);
-        printf("Используйте 'encode' или 'decode'\n");
-        return 1;
-    }
-    
-    return 0;
+// рекурсивно освобождаем память под дерево
+void freeTree(Node* r) {
+    if (!r) return;                     // если узел пуст — прекращаем
+    freeTree(r->left);                  // удаляем левое поддерево
+    freeTree(r->right);                 // удаляем правое поддерево
+    free(r);                            // удаляем сам узел
 }
+
+// =======================
+//           MAIN
+// =======================
+int main() {
+    const char* in  = "input.txt";      // имя входного файла
+    const char* enc = "encoded.bin";    // имя сжатого файла
+    const char* dec = "decoded.txt";    // имя восстановленного файла
+
+    unsigned int freq[N];               // массив частот всех символов
+    countFreq(in, freq);                // считаем частоты в файле
+
+    unsigned int size = 0;              // переменная для исходного размера файла
+    for (int i = 0; i < N; i++)
+        size += freq[i];                // суммируем частоты всех символов
+
+    Node* root = buildTree(freq);       // строим дерево Хаффмана
+
+    char codes[N][N] = {0};             // двумерный массив для кодов каждого символа
+    char tmp[N];                        // временная строка для построения кодов
+    makeCodes(root, codes, tmp, 0);     // генерируем все коды
+
+    encode(in, enc, codes, size);       // кодируем файл
+    decode(enc, dec, root);             // декодируем обратно
+
+    if (sameFiles(in, dec))             // проверяем, совпадают ли файлы
+        printf("Файлы совпадают! Всё работает.\n");
+    else
+        printf("Что-то не так.\n");
+
+    freeTree(root);                     // освобождаем память под дерево
+    return 0;                           // конец программы
+}
+
